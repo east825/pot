@@ -10,13 +10,15 @@ import argparse
 import yaml
 import glob
 import os
+from StringIO import StringIO
 from pprint import pprint
 
 class DotFile(object):
-    """Represents dotfile stored in repo.
+    """Represents single dotfile stored in repo.
+
     name - name of the dotfile in repository
     target - name of the file in system
-    action - action for placing dotfile in system. Can be either 'symlink' or 'copy'.
+    action - action for placing dotfile in system. Can be one of symlink/copy/include.
     """
     def __init__(self, name, target=None, action='symlink'):
         self.name = name
@@ -25,13 +27,38 @@ class DotFile(object):
 
     def __str__(self):
         # attrs = ' '.join('{}={}'.format(k, v) for k, v in self.__dict__.items())
-        return "<DotFile: name='{name}' target='{target}' action={action}>".format(**self.__dict__)
-
+        return "<DotFile: name={name!r} target={target!r} action={action!r}>".format(**self.__dict__)
 
 class Config(object):
     def __init__(self, dotfiles, **kwargs):
         self.dotfiles = dotfiles
         self.__dict__.update(kwargs)
+
+    def __str__(self):
+        attrs = dict(self.__dict__)
+        dotfiles = attrs.pop('dotfiles')
+        return '<Config: {} len(dotfiles)={}>'.format(
+            ' '.join('{}={}'.format(k, v) for k, v in attrs.items()),
+            len(dotfiles))
+
+    @classmethod
+    def from_yaml(cls, stream):
+        config = yaml.load(stream)
+        dotfiles = config.pop('dotfiles')
+        dotfiles = [DotFile(**df) for df in dotfiles]
+        return cls(dotfiles, **config)
+
+    def to_yaml(self, stream=None):
+        if stream is None:
+            stringbuf= StringIO()
+            self.to_yaml(stringbuf)
+            return stringbuf.getvalue()
+        else:
+            attrs = dict(self.__dict__)
+            dotfiles = attrs.pop('dotfiles')
+            dotfiles = dict(dotfiles=[d.__dict__ for d in self.dotfiles])
+            yaml.dump(attrs, stream, default_flow_style=False)
+            yaml.dump(dotfiles, stream, default_flow_style=False)
 
 
 def initialize_storage(args):
@@ -39,8 +66,10 @@ def initialize_storage(args):
     # for name in os.listdir(os.path.join(args.location, 'dotfiles')):
     #     print(name)
     dotfiles = [DotFile(name=os.path.basename(f)) for f in glob.iglob(dotfiles_pattern)]
-    with open(os.path.join(args.location, 'config.yaml'), 'wb') as config:
-        yaml.dump([df.__dict__ for df in dotfiles], config)
+    config = Config(dotfiles, foo='bar')
+    print(config)
+    with open(os.path.join(args.location, 'config.yaml'), 'wb') as config_file:
+        print(config.to_yaml(stream=config_file))
 
 
 def install_dotfiles(args):
