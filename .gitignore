@@ -1,0 +1,6 @@
+/dotfiles/
+/config.yaml
+
+/env/
+
+*.py[co]
