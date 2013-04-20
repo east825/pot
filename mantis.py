@@ -7,11 +7,25 @@ Mantis is simple command-line utility that helps you to manage your precious dot
 from __future__ import print_function
 
 import argparse
+import shutil
 import yaml
 import glob
 import os
 from StringIO import StringIO
 from pprint import pprint
+import logging
+import re
+
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+console = logging.StreamHandler()
+console.setLevel(logging.DEBUG)
+console.setFormatter(fmt=logging.Formatter('%(levelname)s:%(name)s: %(message)s'))
+logger.addHandler(console)
+logger.propagate = False
+
+DEFAULT_INCLUSION_FORMAT = '. {src}'
 
 class DotFile(object):
     """Represents single dotfile stored in repo.
@@ -22,7 +36,7 @@ class DotFile(object):
     """
     def __init__(self, name, target=None, action='symlink'):
         self.name = name
-        self.target = name if target is None else target
+        self.target = os.path.join('~', name) if target is None else target
         self.action = action
 
     def __str__(self):
@@ -67,14 +81,38 @@ def initialize_storage(args):
     #     print(name)
     dotfiles = [DotFile(name=os.path.basename(f)) for f in glob.iglob(dotfiles_pattern)]
     config = Config(dotfiles, foo='bar')
-    print(config)
-    with open(os.path.join(args.location, 'config.yaml'), 'wb') as config_file:
-        print(config.to_yaml(stream=config_file))
+    logger.debug('New config:\n%s', config)
+    with open(os.path.join(args.location, 'config.yaml'), 'wb') as fd:
+        print(config.to_yaml(stream=fd))
 
 
 def install_dotfiles(args):
-    pass
-
+    with open(os.path.join(args.location, 'config.yaml')) as fd:
+        config =  Config.from_yaml(fd)
+    for dotfile in config.dotfiles:
+        action = dotfile.action
+        src = os.path.abspath(os.path.join('dotfiles', dotfile.name))
+        dst = os.path.expanduser(dotfile.target)
+        if action == 'symlink':
+            print('Symlinking {} -> {}'.format(src, dst))
+            # os.symlink(src, dst)
+        elif action == 'copy':
+            print('Copying {} -> {}'.format(src, dst))
+            # shutil.copy(src, dst)
+        elif action == 'include':
+            print('Checking for previous inclusion...', end=' ')
+            inclusion_smt = DEFAULT_INCLUSION_FORMAT.format(src=src)
+            pattern = re.escape(inclusion_smt)
+            pattern = r'^\s*{}\s*$'.format(pattern)
+            logger.debug('Inclusion pattern %s', pattern)
+            pattern = re.compile(pattern, re.MULTILINE)
+            with open(dst, 'a+') as target:
+                if pattern.search(target.read()):
+                    print('Found')
+                else:
+                    print('Not found')
+                    print('Appending {smt!r} to {target}'.format(smt=inclusion_smt, target=dst))
+                    target.write(inclusion_smt + '\n')
 
 def main():
     parser = argparse.ArgumentParser(prog='mantis', description=__doc__)
