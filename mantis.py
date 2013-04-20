@@ -15,6 +15,9 @@ from StringIO import StringIO
 from pprint import pprint
 import logging
 import re
+import subprocess
+import sys
+from contextlib import contextmanager
 
 
 logger = logging.getLogger(__name__)
@@ -26,6 +29,17 @@ logger.addHandler(console)
 logger.propagate = False
 
 DEFAULT_INCLUSION_FORMAT = '. {src}'
+
+@contextmanager
+def cd(path):
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(path)
+        logger.debug('Changing cwd to %s', path)
+        yield
+    finally:
+        logger.debug('Changing cwd back to %s', old_cwd)
+        os.chdir(old_cwd)
 
 
 class DotFile(object):
@@ -78,7 +92,27 @@ class Config(object):
             yaml.dump(dotfiles, stream, default_flow_style=False)
 
 
+def clone_git_dotfiles(url):
+    def check_call(*args):
+        subprocess.check_call(args, stdout=sys.stdout, stderr=sys.stderr)
+
+    check_call('git', 'clone', url, 'dotfiles')
+    with cd('dotfiles'):
+        if os.path.exists('.gitmodules'):
+            check_call('git', 'submodule', 'init')
+            check_call('git', 'submodule', 'update')
+
 def initialize_storage(args):
+    if not os.path.exists(args.location):
+        os.makedirs(args.location)
+    if args.git:
+        print('Cloning {}'.format(args.git))
+        try:
+            with cd(args.location):
+                clone_git_dotfiles(args.git)
+        except subprocess.CalledProcessError:
+            print('Can\'t clone and initialize git repo properly')
+            return
     dotfiles_pattern = os.path.join(args.location, 'dotfiles', '.**')
     # for name in os.listdir(os.path.join(args.location, 'dotfiles')):
     #     print(name)
@@ -86,7 +120,7 @@ def initialize_storage(args):
     config = Config(dotfiles, foo='bar')
     logger.debug('New config:\n%s', config)
     with open(os.path.join(args.location, 'config.yaml'), 'wb') as fd:
-        print(config.to_yaml(stream=fd))
+        config.to_yaml(stream=fd)
 
 
 def install_dotfiles(args):
@@ -150,6 +184,7 @@ def main():
     # new storage initialization command
     init_command = subparsers.add_parser('init')
     init_command.add_argument('location', nargs='?', default='.')
+    init_command.add_argument('--git', help="Clone specified git repository in 'dotfiles' subdirectory")
     init_command.set_defaults(func=initialize_storage)
 
     # dotfile installation command
