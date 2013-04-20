@@ -27,6 +27,7 @@ logger.propagate = False
 
 DEFAULT_INCLUSION_FORMAT = '. {src}'
 
+
 class DotFile(object):
     """Represents single dotfile stored in repo.
 
@@ -34,6 +35,7 @@ class DotFile(object):
     target - name of the file in system
     action - action for placing dotfile in system. Can be one of symlink/copy/include.
     """
+
     def __init__(self, name, target=None, action='symlink'):
         self.name = name
         self.target = os.path.join('~', name) if target is None else target
@@ -42,6 +44,7 @@ class DotFile(object):
     def __str__(self):
         # attrs = ' '.join('{}={}'.format(k, v) for k, v in self.__dict__.items())
         return "<DotFile: name={name!r} target={target!r} action={action!r}>".format(**self.__dict__)
+
 
 class Config(object):
     def __init__(self, dotfiles, **kwargs):
@@ -64,13 +67,13 @@ class Config(object):
 
     def to_yaml(self, stream=None):
         if stream is None:
-            stringbuf= StringIO()
+            stringbuf = StringIO()
             self.to_yaml(stringbuf)
             return stringbuf.getvalue()
         else:
             attrs = dict(self.__dict__)
             dotfiles = attrs.pop('dotfiles')
-            dotfiles = dict(dotfiles=[d.__dict__ for d in self.dotfiles])
+            dotfiles = dict(dotfiles=[d.__dict__ for d in dotfiles])
             yaml.dump(attrs, stream, default_flow_style=False)
             yaml.dump(dotfiles, stream, default_flow_style=False)
 
@@ -88,31 +91,55 @@ def initialize_storage(args):
 
 def install_dotfiles(args):
     with open(os.path.join(args.location, 'config.yaml')) as fd:
-        config =  Config.from_yaml(fd)
+        config = Config.from_yaml(fd)
     for dotfile in config.dotfiles:
         action = dotfile.action
         src = os.path.abspath(os.path.join('dotfiles', dotfile.name))
+        logger.debug('src: %s', src)
+        if not os.path.exists(src):
+            print("Dotfile {!r} doesn't exists. Check your configuration.".format(src))
+            continue
         dst = os.path.expanduser(dotfile.target)
+        logger.debug('dst: %s', dst)
+        if action in ('symlink', 'copy') and os.path.exists(dst):
+            # symlinks are always deleted, other files only if force flag was set
+            if args.force or os.path.islink(dst):
+                try:
+                    # os.path.isdir always follows symlinks
+                    if os.path.isdir(dst) and not os.path.islink(dst):
+                        shutil.rmtree(dst)
+                    else:
+                        os.remove(dst)
+                except OSError as e:
+                    print("Can't delete {!r}: {}".format(e.filename, e.strerror))
+                    continue
+            else:
+                print('File {} exists. Delete it manually or use force mode to override it'.format(dst))
+                continue
         if action == 'symlink':
             print('Symlinking {} -> {}'.format(src, dst))
-            # os.symlink(src, dst)
+            os.symlink(src, dst)
         elif action == 'copy':
             print('Copying {} -> {}'.format(src, dst))
-            # shutil.copy(src, dst)
+            shutil.copy(src, dst)
         elif action == 'include':
-            print('Checking for previous inclusion...', end=' ')
             inclusion_smt = DEFAULT_INCLUSION_FORMAT.format(src=src)
             pattern = re.escape(inclusion_smt)
             pattern = r'^\s*{}\s*$'.format(pattern)
             logger.debug('Inclusion pattern %s', pattern)
             pattern = re.compile(pattern, re.MULTILINE)
-            with open(dst, 'a+') as target:
-                if pattern.search(target.read()):
-                    print('Found')
-                else:
+            try:
+                with open(dst, 'r+') as target:
+                    print('Checking for previous inclusion in {!r}...'.format(dst), end=' ')
+                    if pattern.search(target.read()):
+                        print('Found. Skipping')
+                        continue
                     print('Not found')
                     print('Appending {smt!r} to {target}'.format(smt=inclusion_smt, target=dst))
                     target.write(inclusion_smt + '\n')
+            except IOError as e:
+                print("Can't read/write target {!r}: {}".format(e.filename, e.strerror))
+
 
 def main():
     parser = argparse.ArgumentParser(prog='mantis', description=__doc__)
