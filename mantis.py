@@ -12,7 +12,6 @@ import yaml
 import glob
 import os
 from StringIO import StringIO
-from pprint import pprint
 import logging
 import re
 import subprocess
@@ -29,6 +28,7 @@ logger.addHandler(console)
 logger.propagate = False
 
 DEFAULT_INCLUSION_FORMAT = '. {src}'
+
 
 @contextmanager
 def cd(path):
@@ -101,6 +101,7 @@ def clone_git_dotfiles(url):
         if os.path.exists('.gitmodules'):
             check_call('git', 'submodule', 'init')
             check_call('git', 'submodule', 'update')
+
 
 def initialize_storage(args):
     if not os.path.exists(args.location):
