@@ -6,6 +6,7 @@ It has simple command line interface that allows you to automatize some common o
 
 Directory format
 ----------------
+::
 
     .pot
     ├── config.yaml
