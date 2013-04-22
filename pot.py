@@ -42,7 +42,7 @@ from contextlib import contextmanager
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 console = logging.StreamHandler()
-console.setLevel(logging.DEBUG)
+console.setLevel(logging.CRITICAL)
 console.setFormatter(fmt=logging.Formatter('%(levelname)s:%(name)s: %(message)s'))
 logger.addHandler(console)
 logger.propagate = False
@@ -50,6 +50,14 @@ logger.propagate = False
 DEFAULT_INCLUSION_FORMAT = '. {src}'
 DEFAULT_REPO = '~/.pot'
 
+def real_dir(path):
+    return not os.path.islink(path) and os.path.isdir(path)
+
+def broken_link(path):
+    return os.path.islink(path) and not os.path.exists(path)
+
+def link_to_same_file(dst, src):
+    return os.path.islink(dst) and os.path.exists(dst) and os.path.samefile(src, dst)
 
 @contextmanager
 def cd(path):
@@ -109,7 +117,8 @@ class Config(object):
             attrs = dict(self.__dict__)
             dotfiles = attrs.pop('dotfiles')
             dotfiles = dict(dotfiles=[d.__dict__ for d in dotfiles])
-            yaml.dump(attrs, stream, default_flow_style=False)
+            if attrs:
+                yaml.dump(attrs, stream, default_flow_style=False)
             yaml.dump(dotfiles, stream, default_flow_style=False)
 
 
@@ -135,14 +144,15 @@ def initialize_storage(args):
         except subprocess.CalledProcessError:
             print('Can\'t clone and initialize git repo properly', file=sys.stderr)
             return
-    dotfiles_pattern = os.path.join(args.location, 'dotfiles', '.**')
-    # for name in os.listdir(os.path.join(args.location, 'dotfiles')):
-    #     print(name)
-    dotfiles = [DotFile(name=os.path.basename(f)) for f in glob.iglob(dotfiles_pattern)]
-    config = Config(dotfiles, foo='bar')
-    logger.debug('New config:\n%s', config)
-    with open(os.path.join(args.location, 'config.yaml'), 'wb') as fd:
-        config.to_yaml(stream=fd)
+    with cd(args.location):
+        if not os.path.exists('dotfiles'):
+            os.mkdir('dotfiles')
+        dotfiles_pattern = os.path.join('dotfiles', '.**')
+        dotfiles = [DotFile(name=os.path.basename(f)) for f in glob.iglob(dotfiles_pattern)]
+        config = Config(dotfiles)
+        logger.debug('New config:\n%s', config)
+        with open('config.yaml', 'wb') as fd:
+            config.to_yaml(stream=fd)
 
 
 def install_dotfiles(args):
@@ -157,12 +167,14 @@ def install_dotfiles(args):
             continue
         dst = os.path.expanduser(dotfile.target)
         logger.debug('dst: %s', dst)
-        if action in ('symlink', 'copy') and os.path.exists(dst):
+        # os.path.exists(path) returns False for broken symlinks,
+        # os.path.lexists does the right thing
+        if action in ('symlink', 'copy') and os.path.lexists(dst):
             # symlinks are always deleted, other files only if force flag was set
-            if args.force or os.path.samefile(src, dst):
+            if args.force or broken_link(dst) or link_to_same_file(src, dst):
                 try:
                     # os.path.isdir always follows symlinks
-                    if os.path.isdir(dst) and not os.path.islink(dst):
+                    if real_dir(dst):
                         shutil.rmtree(dst)
                     else:
                         os.remove(dst)
@@ -204,6 +216,7 @@ def grab_dotfile(args):
     dst_path = os.path.join(pot_repo, 'dotfiles', os.path.basename(args.path))
     print('Moving {src} to {dst}'.format(src=args.path, dst=dst_path))
     try:
+        # move always overwrite its target
         shutil.move(args.path, dst_path)
     except EnvironmentError as e:
         print("Can't move {src} -> {dst}: {strerr}".format(src=args.path, dst=dst_path, strerr=e.strerror),
