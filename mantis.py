@@ -48,6 +48,7 @@ logger.addHandler(console)
 logger.propagate = False
 
 DEFAULT_INCLUSION_FORMAT = '. {src}'
+DEFAULT_REPO = '~/.mantis'
 
 
 @contextmanager
@@ -114,7 +115,7 @@ class Config(object):
 
 def clone_git_dotfiles(url):
     def check_call(*args):
-        subprocess.check_call(args, stdout=sys.stdout, stderr=sys.stderr)
+        subprocess.check_call(args)
 
     check_call('git', 'clone', url, 'dotfiles')
     with cd('dotfiles'):
@@ -132,7 +133,7 @@ def initialize_storage(args):
             with cd(args.location):
                 clone_git_dotfiles(args.git)
         except subprocess.CalledProcessError:
-            print('Can\'t clone and initialize git repo properly')
+            print('Can\'t clone and initialize git repo properly', file=sys.stderr)
             return
     dotfiles_pattern = os.path.join(args.location, 'dotfiles', '.**')
     # for name in os.listdir(os.path.join(args.location, 'dotfiles')):
@@ -152,7 +153,7 @@ def install_dotfiles(args):
         src = os.path.abspath(os.path.join('dotfiles', dotfile.name))
         logger.debug('src: %s', src)
         if not os.path.exists(src):
-            print("Dotfile {!r} doesn't exists. Check your configuration.".format(src))
+            print("Dotfile {!r} doesn't exists. Check your configuration.".format(src), file=sys.stderr)
             continue
         dst = os.path.expanduser(dotfile.target)
         logger.debug('dst: %s', dst)
@@ -166,10 +167,11 @@ def install_dotfiles(args):
                     else:
                         os.remove(dst)
                 except OSError as e:
-                    print("Can't delete {!r}: {}".format(e.filename, e.strerror))
+                    print("Can't delete {!r}: {}".format(e.filename, e.strerror), file=sys.stderr)
                     continue
             else:
-                print('File {} exists. Delete it manually or use force mode to override it'.format(dst))
+                print('File {} exists. Delete it manually or use force mode to override it'.format(dst),
+                      file=sys.stderr)
                 continue
         if action == 'symlink':
             print('Symlinking {} -> {}'.format(src, dst))
@@ -193,26 +195,48 @@ def install_dotfiles(args):
                     print('Appending {smt!r} to {target}'.format(smt=inclusion_smt, target=dst))
                     target.write(inclusion_smt + '\n')
             except IOError as e:
-                print("Can't read/write target {!r}: {}".format(e.filename, e.strerror))
+                print("Can't read/write target {!r}: {}".format(e.filename, e.strerror), file=sys.stderr)
+
+
+def grab_dotfile(args):
+    mantis_repo = os.path.expanduser(os.getenv('MANTIS_HOME', DEFAULT_REPO))
+    logger.debug('Using %s as global repo', mantis_repo)
+    dst_path = os.path.join(mantis_repo, 'dotfiles', os.path.basename(args.path))
+    print('Moving {src} to {dst}'.format(src=args.path, dst=dst_path))
+    try:
+        shutil.move(args.path, dst_path)
+    except EnvironmentError as e:
+        print("Can't move {src} -> {dst}: {strerr}".format(src=args.path, dst=dst_path, strerr=e.strerror),
+              file=sys.stderr)
+        return
+    print('Symlinking {} -> {}'.format(dst_path, args.path))
+    try:
+        os.symlink(dst_path, args.path)
+    except OSError as e:
+        print("Can't create symlink: {}".format(e.strerror), file=sys.stderr)
 
 
 def main():
     parser = argparse.ArgumentParser(prog='mantis', description=__doc__)
-    parser.add_argument('-v', action='count', dest='verbosity')
-    parser.add_argument('-f', '--force', action='store_true')
+    parser.add_argument('-v', action='count', dest='verbosity', help='verbosity level')
+    parser.add_argument('-f', '--force', action='store_true', help='overwrite existing files')
     subparsers = parser.add_subparsers()
 
     # new storage initialization command
-    init_command = subparsers.add_parser('init')
-    init_command.add_argument('location', nargs='?', default='.')
-    init_command.add_argument('--git', help="Clone specified git repository in 'dotfiles' subdirectory")
+    init_command = subparsers.add_parser('init', help='create mantis repository and populate default config.yaml')
+    init_command.add_argument('location', nargs='?', default='.', help='mantis repository')
+    init_command.add_argument('--git', metavar='URL', help='git repository URL')
     init_command.set_defaults(func=initialize_storage)
 
     # dotfile installation command
-    install_command = subparsers.add_parser('install')
-    install_command.add_argument('-c', '--config', type=argparse.FileType('rb'))
-    install_command.add_argument('location', nargs='?', default='.')
+    install_command = subparsers.add_parser('install', help='install dotfiles in system')
+    install_command.add_argument('location', nargs='?', default='.', help='mantis repository')
     install_command.set_defaults(func=install_dotfiles)
+
+    # dotfile capturing command
+    grab_command = subparsers.add_parser('grab', help='move dotfile to repository and symlink it')
+    grab_command.add_argument('path', help='path to dotfile')
+    grab_command.set_defaults(func=grab_dotfile)
 
     args = parser.parse_args()
     args.func(args)
