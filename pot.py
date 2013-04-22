@@ -159,7 +159,7 @@ def install_dotfiles(args):
         logger.debug('dst: %s', dst)
         if action in ('symlink', 'copy') and os.path.exists(dst):
             # symlinks are always deleted, other files only if force flag was set
-            if args.force or os.path.islink(dst):
+            if args.force or os.path.samefile(src, dst):
                 try:
                     # os.path.isdir always follows symlinks
                     if os.path.isdir(dst) and not os.path.islink(dst):
