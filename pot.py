@@ -21,7 +21,7 @@
 # THE SOFTWARE.
 
 """
-Mantis is simple command-line utility that helps you to manage your precious dotfiles.
+Pot is simple command-line utility that helps you to manage your precious dotfiles.
 """
 
 from __future__ import print_function
@@ -48,7 +48,7 @@ logger.addHandler(console)
 logger.propagate = False
 
 DEFAULT_INCLUSION_FORMAT = '. {src}'
-DEFAULT_REPO = '~/.mantis'
+DEFAULT_REPO = '~/.pot'
 
 
 @contextmanager
@@ -199,9 +199,9 @@ def install_dotfiles(args):
 
 
 def grab_dotfile(args):
-    mantis_repo = os.path.expanduser(os.getenv('MANTIS_HOME', DEFAULT_REPO))
-    logger.debug('Using %s as global repo', mantis_repo)
-    dst_path = os.path.join(mantis_repo, 'dotfiles', os.path.basename(args.path))
+    pot_repo = os.path.expanduser(os.getenv('POT_HOME', DEFAULT_REPO))
+    logger.debug('Using %s as global repo', pot_repo)
+    dst_path = os.path.join(pot_repo, 'dotfiles', os.path.basename(args.path))
     print('Moving {src} to {dst}'.format(src=args.path, dst=dst_path))
     try:
         shutil.move(args.path, dst_path)
@@ -217,20 +217,20 @@ def grab_dotfile(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(prog='mantis', description=__doc__)
+    parser = argparse.ArgumentParser(prog='pot', description=__doc__)
     parser.add_argument('-v', action='count', dest='verbosity', help='verbosity level')
     parser.add_argument('-f', '--force', action='store_true', help='overwrite existing files')
     subparsers = parser.add_subparsers()
 
     # new storage initialization command
-    init_command = subparsers.add_parser('init', help='create mantis repository and populate default config.yaml')
-    init_command.add_argument('location', nargs='?', default='.', help='mantis repository')
+    init_command = subparsers.add_parser('init', help='create pot repository and populate default config.yaml')
+    init_command.add_argument('location', nargs='?', default='.', help='pot repository')
     init_command.add_argument('--git', metavar='URL', help='git repository URL')
     init_command.set_defaults(func=initialize_storage)
 
     # dotfile installation command
     install_command = subparsers.add_parser('install', help='install dotfiles in system')
-    install_command.add_argument('location', nargs='?', default='.', help='mantis repository')
+    install_command.add_argument('location', nargs='?', default='.', help='pot repository')
     install_command.set_defaults(func=install_dotfiles)
 
     # dotfile capturing command
