@@ -25,18 +25,17 @@ Pot is simple command-line utility that helps you to manage your precious dotfil
 """
 
 from __future__ import print_function
-
 import argparse
 import shutil
-import yaml
 import glob
-import os
-from StringIO import StringIO
 import logging
-import re
 import subprocess
 import sys
 from contextlib import contextmanager
+
+import yaml
+import os
+import re
 
 
 logger = logging.getLogger(__name__)
@@ -50,14 +49,30 @@ logger.propagate = False
 DEFAULT_INCLUSION_FORMAT = '. {src}'
 DEFAULT_REPO = '~/.pot'
 
+
 def real_dir(path):
     return not os.path.islink(path) and os.path.isdir(path)
+
 
 def broken_link(path):
     return os.path.islink(path) and not os.path.exists(path)
 
+
 def link_to_same_file(dst, src):
     return os.path.islink(dst) and os.path.exists(dst) and os.path.samefile(src, dst)
+
+
+def yaml_scalar(value):
+    return yaml.ScalarNode(tag='tag:yaml.org,2002:str', value=value)
+
+
+def yaml_map(items):
+    return yaml.MappingNode(tag='tag:yaml.org,2002:map', value=items)
+
+
+def yaml_seq(elems):
+    return yaml.SequenceNode(tag='tag:yaml.org,2002:seq', value=elems)
+
 
 @contextmanager
 def cd(path):
@@ -84,6 +99,17 @@ class DotFile(object):
         self.target = os.path.join('~', name) if target is None else target
         self.action = action
 
+    def as_yaml_node(self):
+        # It needs to be done manually to preserve order of key-value pairs
+        return yaml_map([
+            (yaml_scalar('name'), yaml_scalar(self.name)),
+            (yaml_scalar('target'), yaml_scalar(self.target)),
+            (yaml_scalar('action'), yaml_scalar(self.action))
+        ])
+
+    def to_yaml(self, stream=None):
+        return yaml.serialize(self.as_yaml_node(), stream)
+
     def __str__(self):
         # attrs = ' '.join('{}={}'.format(k, v) for k, v in self.__dict__.items())
         return "<DotFile: name={name!r} target={target!r} action={action!r}>".format(**self.__dict__)
@@ -101,6 +127,14 @@ class Config(object):
             ' '.join('{}={}'.format(k, v) for k, v in attrs.items()),
             len(dotfiles))
 
+    def as_yaml_node(self):
+        attrs = dict(self.__dict__)
+        dotfiles = attrs.pop('dotfiles')
+        return yaml_map(
+            [(yaml_scalar(name), yaml_scalar(str(value))) for name, value in attrs.items()] +
+            [(yaml_scalar('dotfiles'), yaml_seq([d.as_yaml_node() for d in dotfiles]))],
+        )
+
     @classmethod
     def from_yaml(cls, stream):
         config = yaml.load(stream)
@@ -109,17 +143,7 @@ class Config(object):
         return cls(dotfiles, **config)
 
     def to_yaml(self, stream=None):
-        if stream is None:
-            stringbuf = StringIO()
-            self.to_yaml(stringbuf)
-            return stringbuf.getvalue()
-        else:
-            attrs = dict(self.__dict__)
-            dotfiles = attrs.pop('dotfiles')
-            dotfiles = dict(dotfiles=[d.__dict__ for d in dotfiles])
-            if attrs:
-                yaml.dump(attrs, stream, default_flow_style=False)
-            yaml.dump(dotfiles, stream, default_flow_style=False)
+        return yaml.serialize(self.as_yaml_node(), stream)
 
 
 def clone_git_dotfiles(url):
