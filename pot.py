@@ -191,6 +191,7 @@ def initialize_storage(args):
 
 
 def install_dotfiles(args):
+    logger.debug('args: %s' % vars(args))
     with open(os.path.join(args.location, 'config.yaml')) as cfg:
         config = Config.from_yaml(cfg)
     for dotfile in config.dotfiles:
@@ -199,7 +200,7 @@ def install_dotfiles(args):
         logger.debug('src: %s', src)
         if not os.path.exists(src):
             print("Dotfile {!r} doesn't exists. Check your configuration.".format(src), file=sys.stderr)
-            if args.failfast:
+            if args.fail_fast:
                 return
             continue
         dst = os.path.expanduser(dotfile.target)
@@ -209,7 +210,7 @@ def install_dotfiles(args):
         if action in ('symlink', 'copy') and os.path.lexists(dst):
             # symlinks are always deleted, other files only if force flag was set
             if args.force or broken_link(dst) or link_to_same_file(src, dst):
-                with reporting('Removing {}'.format(dst), failfast=args.failfast):
+                with reporting('Removing {}'.format(dst), failfast=args.fail_fast):
                     # os.path.isdir always follows symlinks
                     if real_dir(dst):
                         shutil.rmtree(dst)
@@ -218,7 +219,7 @@ def install_dotfiles(args):
             else:
                 print('File "{}" exists. Delete it manually or use force mode to override it'.format(dst),
                       file=sys.stderr)
-                if args.failfast:
+                if args.fail_fast:
                     return
                 continue
         if action == 'symlink':
@@ -233,7 +234,7 @@ def install_dotfiles(args):
             pattern = r'^\s*{}\s*$'.format(pattern)
             logger.debug('Inclusion pattern %s', pattern)
             pattern = re.compile(pattern, re.MULTILINE)
-            with reporting('Including "{}" in "{}"'.format(src, dst), failfast=args.failfast):
+            with reporting('Including "{}" in "{}"'.format(src, dst), failfast=args.fail_fast):
                 with open(dst, 'r+') as target:
                     print('Checking for previous inclusion in "{}"...'.format(dst), end=' ')
                     if pattern.search(target.read()):
