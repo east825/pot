@@ -1,0 +1,30 @@
+# Bash completion script for pot. 
+
+# Copy it as /etc/bash_completion.d/pot to enable completion.
+# Autocompletion will be turned on your next login, but if 
+# if you are really impatient you can also manually source it
+# . /etc/bash_completion.d/pot
+
+_pot() {
+    local cur prev all_opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    all_opts="init install grub -h --help -v -f --force -F --fail-fast"
+
+    case "$prev" in
+        init)
+            local init_options="--git"
+            COMPREPLY=( $(compgen -W "$init_options" -- "$cur") )
+            return 0
+            ;;
+        *) 
+            # other command don't have any options yet
+            ;;
+    esac
+    COMPREPLY=( $(compgen -W "$all_opts" -- "$cur") )
+    return 0
+}
+
+complete -F _pot pot
