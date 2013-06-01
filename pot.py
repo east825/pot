@@ -37,26 +37,37 @@ import yaml
 import os
 import re
 
+POT_HOME = os.path.expanduser(os.getenv('POT_HOME', '~/.pot'))
+DEFAULT_INCLUSION_FORMAT = '. {src}'
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-# logger.addHandler(logging.NullHandler)
+# disable warning about missing handler
+logger.addHandler(logging.NullHandler)
 logger.propagate = False
 
-DEFAULT_INCLUSION_FORMAT = '. {src}'
-DEFAULT_REPO = '~/.pot'
+# file inclusion format in Bash and other shell-like command interpreters
 
-_quit_mode = False
+_quiet_mode = False
+
 
 def real_dir(path):
+    """Check that path refers to real directory, not symlink to it."""
     return not os.path.islink(path) and os.path.isdir(path)
 
 
+def real_file(path):
+    """Check that path refers to real file, not symlink to it."""
+    return not os.path.islink(path) and os.path.isfile(path)
+
+
 def broken_link(path):
+    """Check that path refers to broken symbolic link."""
     return os.path.islink(path) and not os.path.exists(path)
 
 
-def link_to_same_file(dst, src):
+def same_file_symlink(dst, src):
+    """Check that dst is symlink pointing to dst."""
     return os.path.islink(dst) and os.path.exists(dst) and os.path.samefile(src, dst)
 
 
@@ -85,16 +96,13 @@ def cd(path):
 
 
 @contextmanager
-def reporting(msg, error_msg=None, exc_type=EnvironmentError, failfast=False):
-    if not error_msg:
-        error_msg = '"{}" failed'.format(msg)
-    if not _quit_mode:
-        print(msg)
+def report_action(description, suppress=False):
+    print(description)
     try:
         yield
     except Exception as e:
-        logger.error('{}: {}'.format(error_msg, e))
-        if not isinstance(e, exc_type) or failfast:
+        print(':: [ERROR] Failed:', e, file=sys.stderr)
+        if not suppress:
             raise
 
 
@@ -128,14 +136,14 @@ class DotFile(object):
 
 
 class Config(object):
-    """Represents content of 'config.yaml' (dotfiles and settings)"""
+    """Represents content of 'config.yaml' (dotfiles and settings)."""
 
     def __init__(self, dotfiles, **kwargs):
         self.dotfiles = dotfiles
         self.__dict__.update(kwargs)
 
     def __str__(self):
-        attrs = dict(self.__dict__)
+        attrs = dict(vars(self))
         dotfiles = attrs.pop('dotfiles')
         return '<Config: {} len(dotfiles)={}>'.format(
             ' '.join('{}={}'.format(k, v) for k, v in attrs.items()),
@@ -146,13 +154,13 @@ class Config(object):
         dotfiles = attrs.pop('dotfiles')
         return yaml_map(
             [(yaml_scalar(name), yaml_scalar(str(value))) for name, value in attrs.items()] +
-            [(yaml_scalar('dotfiles'), yaml_seq([d.as_yaml_node() for d in dotfiles]))],
+            [(yaml_scalar('dotfiles'), yaml_seq([d.as_yaml_node() for d in dotfiles]))]
         )
 
     @classmethod
     def from_yaml(cls, stream):
         config = yaml.load(stream)
-        dotfiles = config.pop('dotfiles')
+        dotfiles = config.pop('dotfiles', [])
         dotfiles = [DotFile(**df) for df in dotfiles]
         return cls(dotfiles, **config)
 
@@ -160,7 +168,7 @@ class Config(object):
         return yaml.serialize(self.as_yaml_node(), stream)
 
 
-def clone_git_dotfiles(url):
+def clone_git_repo(url):
     def check_call(*args):
         subprocess.check_call(args)
 
@@ -171,133 +179,122 @@ def clone_git_dotfiles(url):
             check_call('git', 'submodule', 'update')
 
 
-def initialize_storage(args):
-    if not os.path.exists(args.location):
-        os.makedirs(args.location)
-    if args.git:
-        with reporting('Cloning {}'.format(args.git), failfast=True):
-            with cd(args.location):
-                clone_git_dotfiles(args.git)
-    with cd(args.location):
+def init(path, git_url):
+    if not os.path.exists(path):
+        os.makedirs(path)
+    if git_url:
+        with report_action('Cloning {}'.format(git_url), suppress=True):
+            with cd(path):
+                clone_git_repo(git_url)
+    with cd(path):
         if not os.path.exists('dotfiles'):
-            logging.debug('Creating dotfiles directory')
             os.mkdir('dotfiles')
         hidden = os.path.join('dotfiles', '.**')
-        dotfiles = [DotFile(name=os.path.basename(f)) for f in glob.iglob(hidden)]
+        dotfiles = [DotFile(name=os.path.basename(f)) for f in glob.glob(hidden)]
         config = Config(dotfiles)
-        logger.debug('New config:\n%s', config)
         with open('config.yaml', 'wb') as cfg:
             config.to_yaml(stream=cfg)
 
 
-def install_dotfiles(args):
-    logger.debug('args: %s' % vars(args))
-    with open(os.path.join(args.location, 'config.yaml')) as cfg:
+def install(dotfiles=None, force=False):
+    if not os.path.exists('config.yaml'):
+        print('[ERROR] Configuration file not found.', file=sys.stderr)
+        return
+    with open(os.path.join(os.getcwd(), 'config.yaml')) as cfg:
         config = Config.from_yaml(cfg)
-    for dotfile in config.dotfiles:
+    if not dotfiles:
+        dotfiles = config.dotfiles
+    for dotfile in dotfiles:
         action = dotfile.action
         src = os.path.abspath(os.path.join('dotfiles', dotfile.name))
-        logger.debug('src: %s', src)
         if not os.path.exists(src):
-            print("Dotfile {!r} doesn't exists. Check your configuration.".format(src), file=sys.stderr)
-            if args.fail_fast:
-                return
+            print('[ERROR] Dotfile "{}" doesn\'t exists'.format(src), file=sys.stderr)
             continue
         dst = os.path.expanduser(dotfile.target)
-        logger.debug('dst: %s', dst)
         # os.path.exists(path) returns False for broken symlinks,
         # os.path.lexists does the right thing
         if action in ('symlink', 'copy') and os.path.lexists(dst):
-            # symlinks are always deleted, other files only if force flag was set
-            if args.force or broken_link(dst) or link_to_same_file(src, dst):
-                with reporting('Removing {}'.format(dst), failfast=args.fail_fast):
+            if force or broken_link(dst) or same_file_symlink(dst, src):
+                with report_action('Removing {}'.format(dst)):
                     # os.path.isdir always follows symlinks
                     if real_dir(dst):
                         shutil.rmtree(dst)
                     else:
                         os.remove(dst)
             else:
-                print('File "{}" exists. Delete it manually or use force mode to override it'.format(dst),
+                print('[ERROR] File "{}" exists. Delete it manually or use force mode to override it'.format(dst),
                       file=sys.stderr)
-                if args.fail_fast:
-                    return
                 continue
         if action == 'symlink':
-            with reporting('Symlinking "{}" -> "{}"'.format(src, dst)):
+            with report_action('Symlinking "{}" -> "{}"'.format(src, dst)):
                 os.symlink(src, dst)
         elif action == 'copy':
-            with reporting('Copying "{}" -> "{}"'.format(src, dst)):
+            with report_action('Copying "{}" -> "{}"'.format(src, dst)):
                 shutil.copy(src, dst)
         elif action == 'include':
-            inclusion_smt = DEFAULT_INCLUSION_FORMAT.format(src=src)
-            pattern = re.escape(inclusion_smt)
+            inclusion_line = DEFAULT_INCLUSION_FORMAT.format(src=src)
+            pattern = re.escape(inclusion_line)
             pattern = r'^\s*{}\s*$'.format(pattern)
-            logger.debug('Inclusion pattern %s', pattern)
             pattern = re.compile(pattern, re.MULTILINE)
-            with reporting('Including "{}" in "{}"'.format(src, dst), failfast=args.fail_fast):
+            with report_action('Including "{}" in "{}"'.format(src, dst)):
                 with open(dst, 'r+') as target:
-                    print('Checking for previous inclusion in "{}"...'.format(dst), end=' ')
+                    logger.debug('checking for previous inclusion in "{}"...'.format(dst))
                     if pattern.search(target.read()):
-                        print('Found. Skipping')
+                        print(':: Skipped. "{}" found in "{}"'.format(inclusion_line, dst))
                         continue
-                    print('Not found')
-                    print('Appending {smt!r} to {target}'.format(smt=inclusion_smt, target=dst))
-                    target.write(inclusion_smt + '\n')
+                    print(':: Appending "{}" to "{}"'.format(inclusion_line, dst))
+                    target.write(inclusion_line + '\n')
 
 
-def grab_dotfile(args):
-    pot_repo = os.path.expanduser(os.getenv('POT_HOME', DEFAULT_REPO))
-    logger.debug('Using %s as global repo', pot_repo)
-    dst_path = os.path.join(pot_repo, 'dotfiles', os.path.basename(args.path))
-    with reporting('Moving {} to {}'.format(args.path, dst_path), failfast=True):
+def grab(path, force=False):
+    logger.debug('using %s as global repo', POT_HOME)
+    dotfiles_dir = os.path.join(POT_HOME, 'dotfiles', os.path.basename(path))
+    with report_action('Moving "{}" to "{}"'.format(path, dotfiles_dir)):
+        filename = os.path.basename(path)
+        if os.path.exists(os.path.join(dotfiles_dir, filename)) and not force:
+            print(':: [ERROR] "{}" already exists in "{}"'.format(filename, dotfiles_dir), file=sys.stderr)
+            return
         # move always overwrite its target
-        shutil.move(args.path, dst_path)
-    with reporting('Symlinking {} -> {}'.format(dst_path, args.path), failfast=True):
-        os.symlink(dst_path, args.path)
+        shutil.move(path, dotfiles_dir)
+    with report_action('Symlinking "{}" -> "{}"'.format(dotfiles_dir, path)):
+        os.symlink(dotfiles_dir, path)
 
 
 def main():
     parser = argparse.ArgumentParser(prog='pot', description=__doc__)
-    parser.add_argument('-v', action='count', dest='verbosity', help='verbosity level')
+    parser.add_argument('-v', action='set_true', dest='verbose', help='verbose mode')
     parser.add_argument('-f', '--force', action='store_true', help='overwrite existing files')
-    parser.add_argument('-F', '--fail-fast', action='store_true', help='stop on first error')
+    # parser.add_argument('-F', '--fail-fast', action='store_true', help='stop on first error')
     subparsers = parser.add_subparsers()
 
     # new storage initialization command
     init_command = subparsers.add_parser('init', help='create pot repository and populate default config.yaml')
     init_command.add_argument('location', nargs='?', default='.', help='pot repository')
     init_command.add_argument('--git', metavar='URL', help='git repository URL')
-    init_command.set_defaults(func=initialize_storage)
+    init_command.set_defaults(func=lambda args: init(args.location, git_url=args.git))
 
     # dotfile installation command
     install_command = subparsers.add_parser('install', help='install dotfiles in system')
-    install_command.add_argument('location', nargs='?', default='.', help='pot repository')
-    install_command.set_defaults(func=install_dotfiles)
+    install_command.add_argument('dotfiles', nargs='*', help='pot repository')
+    install_command.set_defaults(func=lambda args: install(args.dotfiles, args.force))
 
     # dotfile capturing command
     grab_command = subparsers.add_parser('grab', help='move dotfile to repository and symlink it')
     grab_command.add_argument('path', help='path to dotfile')
-    grab_command.set_defaults(func=grab_dotfile)
+    grab_command.set_defaults(func=lambda args: grab(args.path, args.force))
 
     args = parser.parse_args()
 
-    console = logging.StreamHandler()
-    if not args.verbosity:
-        global _quit_mode
-        _quit_mode = True
-    if args.verbosity < 2:
-        console.setLevel(logging.ERROR)
-        console.setFormatter(fmt=logging.Formatter('%(message)s'))
-    else:
-        console.setLevel(logging.DEBUG)
-        console.setFormatter(fmt=logging.Formatter('%(levelname)s:%(name)s: %(message)s'))
-    logger.addHandler(console)
+    if args.verbose:
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.DEBUG)
+        console_handler.setFormatter(fmt=logging.Formatter('%(message)s'))
+        logger.addHandler(console_handler)
 
     try:
         args.func(args)
     except Exception as e:
-        if args.verbosity > 1:
-            logging.exception(e)
+        logger.exception(e)
         sys.exit(1)
 
 
