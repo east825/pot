@@ -258,7 +258,7 @@ def test_existing_symlink():
 
 
 def test_symlink_to_same_file():
-    _test_existing(lambda x: os.symlink('../pot/dotfiles/dotfile', x), modified=True, force=False)
+    _test_existing(delayed(0.1, 0.1)(lambda x: os.symlink('../pot/dotfiles/dotfile', x)), modified=True, force=False)
 
 
 def test_broken_symlink():
