@@ -21,17 +21,18 @@
 # THE SOFTWARE.
 
 from contextlib import contextmanager
-import os
 import tempfile
-import re
-from datetime import datetime
-import subprocess
+import time
+import logging
 
+import os
 import pot
 from pot import cd, Config, DotFile
-
 import nose
 from nose.tools import ok_, eq_, nottest
+
+
+logging.basicConfig(level=logging.CRITICAL)
 
 try:
     from tempfile import TemporaryDirectory as make_temp_dir
@@ -47,6 +48,7 @@ except ImportError:
 
 try:
     import builtins
+
     if not hasattr(builtins, 'callable'):
         callable = lambda x: hasattr(x, '__call__')
 except ImportError:
@@ -54,17 +56,26 @@ except ImportError:
     pass
 
 
-TIME_FORMAT = '%Y-%m-%d %H:%M:%S.%f'
-MTIME_REGEX = re.compile('^Modify: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d{6})', re.MULTILINE)
-
-
-# os.path.getmtime() somehow doesn't return actual time at all
-# this terrible hack it temporary workaround
-# TODO: find out what the heck is going on
+# os.path.getmtime() follows symlinks by default. I've got a lot of creepy bugs
+# because of that before I realized what happens.
+# As a workaround I use lstat to get modification time without following symlinks.
+# Actually in python3.3 you can get nanoseconds precision because result of lstat there
+# has st_mtime_ns field. I use delays as compatibility workaround.
 def mtime(path):
-    output = subprocess.check_output(['stat', path])
-    m = MTIME_REGEX.search(output)
-    return datetime.strptime(m.group(1), TIME_FORMAT)
+    return os.lstat(path).st_mtime
+
+
+def delayed(before=0, after=0):
+    def decorator(f):
+        def wrapper(*args, **kwargs):
+            time.sleep(before)
+            res = f(*args, **kwargs)
+            time.sleep(after)
+            return res
+
+        return wrapper
+
+    return decorator
 
 
 @contextmanager
@@ -76,27 +87,22 @@ def temp_cwd(suffix='', prefix='tmp', dir=None):
 
 @contextmanager
 def assert_modified(path):
-    from mtime import mtime
+    path = os.path.abspath(path)
     # can't get modification time or read broken symlink
     # assume it's always modified
     if pot.broken_link(path):
         yield
         return
-    # old_mtime = os.path.getmtime(path)
     old_mtime = mtime(path)
-    # print 'Old mtime:', old_mtime
     was_file = False
     if os.path.isfile(path):
         was_file = True
         with open(path) as fd:
             old_content = fd.read()
     yield
-    # new_mtime = os.path.getmtime(path)
-    new_mtime = mtime(path)
-    # print 'New mtime:', old_mtime
-    if old_mtime < new_mtime:
+    if old_mtime < mtime(path):
         return
-    # compare file content only if system mtime resolution isn't enough
+        # compare file content only if system mtime resolution isn't enough
     if os.path.isfile(path) and was_file:
         with open(path) as fd:
             content = fd.read()
@@ -168,7 +174,7 @@ def test_init():
             }
         })
         pot.init(path='.')
-        expected_config = Config(dotfiles=[DotFile('.gitconfig'), DotFile('.vimrc'), DotFile('.vim'),])
+        expected_config = Config(dotfiles=[DotFile('.gitconfig'), DotFile('.vimrc'), DotFile('.vim'), ])
         with open('config.yaml') as fd:
             builded_config = Config.from_yaml(fd)
         eq_(expected_config, builded_config)
@@ -208,7 +214,7 @@ dotfiles:
             with updated_env(HOME=os.path.abspath('home')):
                 with cd('pot'):
                     pot.install()
-        # symlink pointing to correct location created
+            # symlink pointing to correct location created
         eq_(os.readlink('home/.vimrc'), os.path.abspath('pot/dotfiles/.vimrc'))
         # new directory created
         ok_(os.path.isdir('somedir/vimfiles'))
@@ -262,9 +268,10 @@ def test_broken_symlink():
 def test_force_mode():
     cases = [
         'other file',
-        {},
-        lambda x: os.symlink('../pot', x), # valid symlink
-        lambda x: os.symlink('not-exists', x)] # broken symlink
+        delayed(0.05, 0.05)(lambda x: os.mkdir(x)),
+        delayed(0.05, 0.05)(lambda x: os.symlink('.', x)), # valid symlink
+        lambda x: os.symlink('not-exists', x) # broken symlink
+    ]
     for content in cases:
         yield _test_existing, content, True, True
 
