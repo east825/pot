@@ -40,11 +40,15 @@ import re
 POT_HOME = os.path.expanduser(os.getenv('POT_HOME', '~/.pot'))
 DEFAULT_INCLUSION_FORMAT = '. {src}'
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('pot')
 logger.setLevel(logging.DEBUG)
 # disable warning about missing handler
-logger.addHandler(logging.NullHandler)
 logger.propagate = False
+
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.CRITICAL)
+console_handler.setFormatter(fmt=logging.Formatter('%(message)s'))
+logger.addHandler(console_handler)
 
 # file inclusion format in Bash and other shell-like command interpreters
 
@@ -119,7 +123,7 @@ class DotFile(object):
         self.target = os.path.join('~', name) if target is None else target
         self.action = action
 
-    def as_yaml_node(self):
+    def _as_yaml_node(self):
         # It needs to be done manually to preserve order of key-value pairs
         return yaml_map([
             (yaml_scalar('name'), yaml_scalar(self.name)),
@@ -128,44 +132,53 @@ class DotFile(object):
         ])
 
     def to_yaml(self, stream=None):
-        return yaml.serialize(self.as_yaml_node(), stream)
+        return yaml.serialize(self._as_yaml_node(), stream)
 
     def __str__(self):
         # attrs = ' '.join('{}={}'.format(k, v) for k, v in self.__dict__.items())
         return "<DotFile: name={name!r} target={target!r} action={action!r}>".format(**self.__dict__)
 
+    def __repr__(self):
+        return self.__str__()
+
+    def __eq__(self, other):
+        return self.name == other.name and self.target == other.target and self.action == other.action
+
+    def __hash__(self):
+        return hash(self.name) ^ hash(self.target) ^ hash(self.action)
+
 
 class Config(object):
     """Represents content of 'config.yaml' (dotfiles and settings)."""
 
-    def __init__(self, dotfiles, **kwargs):
+    def __init__(self, dotfiles):
         self.dotfiles = dotfiles
-        self.__dict__.update(kwargs)
 
     def __str__(self):
-        attrs = dict(vars(self))
-        dotfiles = attrs.pop('dotfiles')
-        return '<Config: {} len(dotfiles)={}>'.format(
-            ' '.join('{}={}'.format(k, v) for k, v in attrs.items()),
-            len(dotfiles))
-
-    def as_yaml_node(self):
         attrs = dict(self.__dict__)
         dotfiles = attrs.pop('dotfiles')
-        return yaml_map(
-            [(yaml_scalar(name), yaml_scalar(str(value))) for name, value in attrs.items()] +
-            [(yaml_scalar('dotfiles'), yaml_seq([d.as_yaml_node() for d in dotfiles]))]
-        )
+        return '<Config: #dotfiles={}>'.format(len(dotfiles))
+
+    def __repr__(self):
+        return self.__str__()
+
+    def _as_yaml_node(self):
+        return yaml_map([
+            (yaml_scalar('dotfiles'), yaml_seq(map(DotFile._as_yaml_node, self.dotfiles)))
+        ])
 
     @classmethod
     def from_yaml(cls, stream):
-        config = yaml.load(stream)
-        dotfiles = config.pop('dotfiles', [])
-        dotfiles = [DotFile(**df) for df in dotfiles]
-        return cls(dotfiles, **config)
+        d = yaml.load(stream)
+        dotfiles = [DotFile(**df) for df in d.get('dotfiles', [])]
+        return cls(dotfiles)
 
     def to_yaml(self, stream=None):
-        return yaml.serialize(self.as_yaml_node(), stream)
+        return yaml.serialize(self._as_yaml_node(), stream)
+
+    def __eq__(self, other):
+        # exact order of dotfiles should not matter
+        return set(self.dotfiles) == set(other.dotfiles)
 
 
 def clone_git_repo(url):
@@ -179,7 +192,7 @@ def clone_git_repo(url):
             check_call('git', 'submodule', 'update')
 
 
-def init(path, git_url):
+def init(path, git_url=None):
     if not os.path.exists(path):
         os.makedirs(path)
     if git_url:
@@ -202,8 +215,11 @@ def install(dotfiles=None, force=False):
         return
     with open(os.path.join(os.getcwd(), 'config.yaml')) as cfg:
         config = Config.from_yaml(cfg)
-    if not dotfiles:
+    if dotfiles is None:
         dotfiles = config.dotfiles
+    else:
+        names = set(dotfiles)
+        dotfiles = [d for d in config.dotfiles if d.name in names]
     for dotfile in dotfiles:
         action = dotfile.action
         src = os.path.abspath(os.path.join('dotfiles', dotfile.name))
@@ -226,11 +242,11 @@ def install(dotfiles=None, force=False):
                       file=sys.stderr)
                 continue
         if action == 'symlink':
-            with report_action('Symlinking "{}" -> "{}"'.format(src, dst)):
+            with report_action('Symlinking "{}" -> "{}"'.format(dst, src)):
                 os.symlink(src, dst)
         elif action == 'copy':
-            with report_action('Copying "{}" -> "{}"'.format(src, dst)):
-                shutil.copy(src, dst)
+            with report_action('Copying "{}" as "{}"'.format(src, dst)):
+                shutil.copytree(src, dst)
         elif action == 'include':
             inclusion_line = DEFAULT_INCLUSION_FORMAT.format(src=src)
             pattern = re.escape(inclusion_line)
@@ -254,7 +270,7 @@ def grab(path, force=False):
         if os.path.exists(os.path.join(dotfiles_dir, filename)) and not force:
             print(':: [ERROR] "{}" already exists in "{}"'.format(filename, dotfiles_dir), file=sys.stderr)
             return
-        # move always overwrite its target
+            # move always overwrite its target
         shutil.move(path, dotfiles_dir)
     with report_action('Symlinking "{}" -> "{}"'.format(dotfiles_dir, path)):
         os.symlink(dotfiles_dir, path)
@@ -276,7 +292,7 @@ def main():
     # dotfile installation command
     install_command = subparsers.add_parser('install', help='install dotfiles in system')
     install_command.add_argument('dotfiles', nargs='*', help='pot repository')
-    install_command.set_defaults(func=lambda args: install(args.dotfiles, args.force))
+    install_command.set_defaults(func=lambda args: install(args.dotfiles or None, args.force))
 
     # dotfile capturing command
     grab_command = subparsers.add_parser('grab', help='move dotfile to repository and symlink it')
@@ -286,15 +302,12 @@ def main():
     args = parser.parse_args()
 
     if args.verbose:
-        console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.DEBUG)
-        console_handler.setFormatter(fmt=logging.Formatter('%(message)s'))
-        logger.addHandler(console_handler)
 
     try:
         args.func(args)
     except Exception as e:
-        logger.exception(e)
+        print('[ERROR]', e, file=sys.stderr)
         sys.exit(1)
 
 
