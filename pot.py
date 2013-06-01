@@ -278,7 +278,7 @@ def grab(path, force=False):
 
 def main():
     parser = argparse.ArgumentParser(prog='pot', description=__doc__)
-    parser.add_argument('-v', action='set_true', dest='verbose', help='verbose mode')
+    parser.add_argument('-v', action='store_true', dest='verbose', help='verbose mode')
     parser.add_argument('-f', '--force', action='store_true', help='overwrite existing files')
     # parser.add_argument('-F', '--fail-fast', action='store_true', help='stop on first error')
     subparsers = parser.add_subparsers()
