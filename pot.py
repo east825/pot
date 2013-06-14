@@ -38,6 +38,8 @@ import os
 import re
 
 POT_HOME = os.path.expanduser(os.getenv('POT_HOME', '~/.pot'))
+
+# file inclusion format in Bash and other shell-like command interpreters
 DEFAULT_INCLUSION_FORMAT = '. {src}'
 
 logger = logging.getLogger('pot')
@@ -50,7 +52,6 @@ console_handler.setLevel(logging.CRITICAL)
 console_handler.setFormatter(fmt=logging.Formatter('%(message)s'))
 logger.addHandler(console_handler)
 
-# file inclusion format in Bash and other shell-like command interpreters
 
 _quiet_mode = False
 
@@ -209,22 +210,24 @@ def init(path, git_url=None):
             config.to_yaml(stream=cfg)
 
 
-def install(dotfiles=None, force=False):
+def install(names=None, force=False):
     if not os.path.exists('config.yaml'):
         print('[ERROR] Configuration file not found.', file=sys.stderr)
         return
     with open(os.path.join(os.getcwd(), 'config.yaml')) as cfg:
         config = Config.from_yaml(cfg)
-    if dotfiles is None:
-        dotfiles = config.dotfiles
-    else:
-        names = set(dotfiles)
-        dotfiles = [d for d in config.dotfiles if d.name in names]
-    for dotfile in dotfiles:
+    names_to_dotfiles = {df.name: df for df in config.dotfiles}
+    if names is None:
+        names = names_to_dotfiles.keys()
+    for name in names:
+        if name not in names_to_dotfiles:
+            print(':: [ERROR] No such file {}. Check configuration file.'.format(name), file=sys.stderr)
+            continue
+        dotfile = names_to_dotfiles[name]
         action = dotfile.action
         src = os.path.abspath(os.path.join('dotfiles', dotfile.name))
         if not os.path.exists(src):
-            print('[ERROR] Dotfile "{}" doesn\'t exists'.format(src), file=sys.stderr)
+            print(':: [ERROR] Dotfile "{}" doesn\'t exists'.format(src), file=sys.stderr)
             continue
         dst = os.path.expanduser(dotfile.target)
         # os.path.exists(path) returns False for broken symlinks,
@@ -291,7 +294,7 @@ def main():
 
     # dotfile installation command
     install_command = subparsers.add_parser('install', help='install dotfiles in system')
-    install_command.add_argument('dotfiles', nargs='*', help='pot repository')
+    install_command.add_argument('dotfiles', nargs='*', help='dotfiles names to install')
     install_command.set_defaults(func=lambda args: install(args.dotfiles or None, args.force))
 
     # dotfile capturing command
