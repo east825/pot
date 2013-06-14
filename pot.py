@@ -37,21 +37,36 @@ import yaml
 import os
 import re
 
+VERBOSE_MESSAGE_FORMAT = '[%(levelname)s]:%(funcName)s:%(lineno)s %(message)s'
 POT_HOME = os.path.expanduser(os.getenv('POT_HOME', '~/.pot'))
-
 # file inclusion format in Bash and other shell-like command interpreters
 DEFAULT_INCLUSION_FORMAT = '. {src}'
+
+
+class RangeFilter(logging.Filter):
+    def __init__(self, name='', minlevel=logging.NOTSET, maxlevel=logging.FATAL):
+        super(RangeFilter, self).__init__(name)
+        self.minlevel = minlevel
+        self.maxlevel = maxlevel
+
+    def filter(self, record):
+        return self.minlevel <= record.levelno <= self.maxlevel
+
 
 logger = logging.getLogger('pot')
 logger.setLevel(logging.DEBUG)
 # disable warning about missing handler
+logger.addHandler(logging.NullHandler())
 logger.propagate = False
 
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.CRITICAL)
-console_handler.setFormatter(fmt=logging.Formatter('%(message)s'))
-logger.addHandler(console_handler)
+info_handler = logging.StreamHandler(sys.stdout)
+info_handler.addFilter(RangeFilter(minlevel=logging.INFO, maxlevel=logging.INFO))
+logger.addHandler(info_handler)
 
+error_handler = logging.StreamHandler()
+error_handler.setLevel(logging.ERROR)
+error_handler.setFormatter(fmt=logging.Formatter('[%(levelname)s] %(message)s'))
+logger.addHandler(error_handler)
 
 _quiet_mode = False
 
@@ -101,12 +116,13 @@ def cd(path):
 
 
 @contextmanager
-def report_action(description, suppress=False):
-    print(description)
+def report_action(description=None, suppress=False):
+    if description is not None:
+        print(description)
     try:
         yield
     except Exception as e:
-        print(':: [ERROR] Failed:', e, file=sys.stderr)
+        logger.error('Failed: %s', e)
         if not suppress:
             raise
 
@@ -206,13 +222,13 @@ def init(path, git_url=None):
         hidden = os.path.join('dotfiles', '.**')
         dotfiles = [DotFile(name=os.path.basename(f)) for f in glob.glob(hidden)]
         config = Config(dotfiles)
-        with open('config.yaml', 'wb') as cfg:
-            config.to_yaml(stream=cfg)
+        with open('config.yaml', 'wb') as fd:
+            config.to_yaml(stream=fd)
 
 
 def install(names=None, force=False):
     if not os.path.exists('config.yaml'):
-        print('[ERROR] Configuration file not found.', file=sys.stderr)
+        logger.error('Configuration file not found.')
         return
     with open(os.path.join(os.getcwd(), 'config.yaml')) as cfg:
         config = Config.from_yaml(cfg)
@@ -221,28 +237,28 @@ def install(names=None, force=False):
         names = names_to_dotfiles.keys()
     for name in names:
         if name not in names_to_dotfiles:
-            print(':: [ERROR] No such file {}. Check configuration file.'.format(name), file=sys.stderr)
+            logger.error('No such file %s. Check configuration file.', name)
             continue
         dotfile = names_to_dotfiles[name]
         action = dotfile.action
         src = os.path.abspath(os.path.join('dotfiles', dotfile.name))
         if not os.path.exists(src):
-            print(':: [ERROR] Dotfile "{}" doesn\'t exists'.format(src), file=sys.stderr)
+            logger.error('Dotfile "%s" doesn\'t exists', src)
             continue
         dst = os.path.expanduser(dotfile.target)
         # os.path.exists(path) returns False for broken symlinks,
         # os.path.lexists does the right thing
         if action in ('symlink', 'copy') and os.path.lexists(dst):
             if force or broken_link(dst) or same_file_symlink(dst, src):
-                with report_action('Removing {}'.format(dst)):
+                logger.debug('Removing %s', dst)
+                with report_action():
                     # os.path.isdir always follows symlinks
                     if real_dir(dst):
                         shutil.rmtree(dst)
                     else:
                         os.remove(dst)
             else:
-                print('[ERROR] File "{}" exists. Delete it manually or use force mode to override it'.format(dst),
-                      file=sys.stderr)
+                logger.error('File "%s" exists. Delete it manually or use force mode to override it', dst)
                 continue
         if action == 'symlink':
             with report_action('Symlinking "{}" -> "{}"'.format(dst, src)):
@@ -257,11 +273,11 @@ def install(names=None, force=False):
             pattern = re.compile(pattern, re.MULTILINE)
             with report_action('Including "{}" in "{}"'.format(src, dst)):
                 with open(dst, 'r+') as target:
-                    logger.debug('checking for previous inclusion in "{}"...'.format(dst))
+                    logger.debug('checking for previous inclusion in "%s"...', dst)
                     if pattern.search(target.read()):
-                        print(':: Skipped. "{}" found in "{}"'.format(inclusion_line, dst))
+                        logger.info('  Skipped: "%s" is already found', inclusion_line)
                         continue
-                    print(':: Appending "{}" to "{}"'.format(inclusion_line, dst))
+                    logger.debug('Appending "%s" to "%s"', inclusion_line, dst)
                     target.write(inclusion_line + '\n')
 
 
@@ -271,7 +287,7 @@ def grab(path, force=False):
     with report_action('Moving "{}" to "{}"'.format(path, dotfiles_dir)):
         filename = os.path.basename(path)
         if os.path.exists(os.path.join(dotfiles_dir, filename)) and not force:
-            print(':: [ERROR] "{}" already exists in "{}"'.format(filename, dotfiles_dir), file=sys.stderr)
+            logger.error('"%" already exists in "%"', filename, dotfiles_dir)
             return
             # move always overwrite its target
         shutil.move(path, dotfiles_dir)
@@ -305,12 +321,15 @@ def main():
     args = parser.parse_args()
 
     if args.verbose:
-        console_handler.setLevel(logging.DEBUG)
+        debug_handler = logging.StreamHandler()
+        debug_handler.addFilter(RangeFilter(minlevel=logging.DEBUG, maxlevel=logging.DEBUG))
+        debug_handler.setFormatter(logging.Formatter(VERBOSE_MESSAGE_FORMAT))
+        logger.addHandler(debug_handler)
 
     try:
         args.func(args)
     except Exception as e:
-        print('[ERROR]', e, file=sys.stderr)
+        logger.error(e)
         sys.exit(1)
 
 
