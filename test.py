@@ -214,7 +214,7 @@ dotfiles:
             with updated_env(HOME=os.path.abspath('home')):
                 with cd('pot'):
                     pot.install()
-            # symlink pointing to correct location created
+        # symlink pointing to correct location created
         eq_(os.readlink('home/.vimrc'), os.path.abspath('pot/dotfiles/.vimrc'))
         # new directory created
         ok_(os.path.isdir('somedir/vimfiles'))
@@ -269,11 +269,35 @@ def test_force_mode():
     cases = [
         'other file',
         delayed(0.05, 0.05)(lambda x: os.mkdir(x)),
-        delayed(0.05, 0.05)(lambda x: os.symlink('.', x)), # valid symlink
-        lambda x: os.symlink('not-exists', x) # broken symlink
+        delayed(0.05, 0.05)(lambda x: os.symlink('.', x)), #  valid symlink
+        lambda x: os.symlink('not-exists', x) #  broken symlink
     ]
     for content in cases:
         yield _test_existing, content, True, True
+
+
+def test_grab():
+    with temp_cwd(prefix='pot-test'):
+        make_hierarchy({
+            'home': {
+                '.pot': {
+                    'dotfiles': {
+                        'foo': ''
+                    },
+                },
+            },
+            'foo': '',
+            'bar': ''
+        })
+        time.sleep(0.1)
+        with assert_modified('bar'):
+            with updated_env(POT_HOME=os.path.abspath('home/.pot')):
+                pot.grab('bar')
+                ok_(pot.same_file_symlink('bar', 'home/.pot/dotfiles/bar'))
+
+        with assert_not_modified('foo'):
+            with updated_env(POT_HOME=os.path.abspath('home/.pot')):
+                pot.grab('foo')
 
 
 if __name__ == '__main__':

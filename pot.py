@@ -38,7 +38,7 @@ import os
 import re
 
 VERBOSE_MESSAGE_FORMAT = '[%(levelname)s]:%(funcName)s:%(lineno)s %(message)s'
-POT_HOME = os.path.expanduser(os.getenv('POT_HOME', '~/.pot'))
+DEFAULT_POT_HOME = '~/.pot'
 # file inclusion format in Bash and other shell-like command interpreters
 DEFAULT_INCLUSION_FORMAT = '. {src}'
 
@@ -86,9 +86,9 @@ def broken_link(path):
     return os.path.islink(path) and not os.path.exists(path)
 
 
-def same_file_symlink(dst, src):
+def same_file_symlink(link, file):
     """Check that dst is symlink pointing to dst."""
-    return os.path.islink(dst) and os.path.exists(dst) and os.path.samefile(src, dst)
+    return os.path.islink(link) and os.path.exists(link) and os.path.samefile(file, link)
 
 
 def yaml_scalar(value):
@@ -282,17 +282,19 @@ def install(names=None, force=False):
 
 
 def grab(path, force=False):
-    logger.debug('using %s as global repo', POT_HOME)
-    dotfiles_dir = os.path.join(POT_HOME, 'dotfiles', os.path.basename(path))
-    with report_action('Moving "{}" to "{}"'.format(path, dotfiles_dir)):
+    global_repo = os.path.expanduser(os.getenv('POT_HOME', DEFAULT_POT_HOME))
+    logger.debug('using %s as global repo', global_repo)
+    dst_dir = os.path.join(global_repo, 'dotfiles')
+    dst_file = os.path.join(dst_dir, os.path.basename(path))
+    with report_action('Moving "{}" to "{}"'.format(path, dst_dir)):
         filename = os.path.basename(path)
-        if os.path.exists(os.path.join(dotfiles_dir, filename)) and not force:
-            logger.error('"%" already exists in "%"', filename, dotfiles_dir)
+        if os.path.exists(dst_file) and not force:
+            logger.error('"%s" already exists in "%s"', filename, dst_dir)
             return
             # move always overwrite its target
-        shutil.move(path, dotfiles_dir)
-    with report_action('Symlinking "{}" -> "{}"'.format(dotfiles_dir, path)):
-        os.symlink(dotfiles_dir, path)
+        shutil.move(path, dst_file)
+    with report_action('Symlinking "{}" -> "{}"'.format(path, dst_file)):
+        os.symlink(dst_file, path)
 
 
 def main():
